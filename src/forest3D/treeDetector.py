@@ -19,7 +19,7 @@ import os
 
 class RasterDetector():
 
-    def __init__(self, raster_layers, support_window=[1,1,1],normalisation='rescale',doHisteq=[True,True,True],res=0.2,gridSize=[600, 600, 1000] ):
+    def __init__(self, raster_layers, support_window=[1,1,1],normalisation='rescale',doHisteq=[True,True,True],res=[0.2,0.2,0.2],gridSize=[600, 600, 1000] ):
 
         self.raster_layers = ['blank','blank','blank']
 
@@ -37,7 +37,10 @@ class RasterDetector():
         for i, val in enumerate(doHisteq):
             self.doHisteq[i] = val
 
-        assert(isinstance(res,float))
+        # Continuity with previous behaviour (supplying a single float)
+        if isinstance(res, float):
+            res = [res, res, res]
+        
         self.res = res
 
         assert(len(gridSize)==3)
@@ -53,15 +56,16 @@ class RasterDetector():
         elif len(np.shape(colour_data)) == 2:
             xyz_clr_data = np.hstack((xyz_data, colour_data))
 
+        totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])),stepSize)) * \
+                        len(range(int(np.min(xyz_data[:, 1])), int(np.max(xyz_data[:, 1])),stepSize))
+
         box_store = np.zeros((1, 4))
         counter = 0
 
         for (x, y, window) in detection_tools.sliding_window_3d(xyz_clr_data, stepSize=stepSize,windowSize=windowSize):  # stepsize 100
 
             # track progress
-            counter = counter + 1
-            totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])),stepSize)) * \
-                         len(range(int(np.min(xyz_data[:, 1])), int(np.max(xyz_data[:, 1])),stepSize))
+            counter = counter + 1            
             sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
             sys.stdout.flush()
 
@@ -132,7 +136,7 @@ class RasterDetector():
 
             rasters_eq = []
             for i, raster in enumerate([raster1, raster2, raster3]):
-                if self.raster_layers[i] is not 'blank':
+                if self.raster_layers[i] != 'blank':    # IDE complains about use of 'is not'
 
                     plow, phigh = np.percentile(raster, (0, 100))
                     raster = exposure.rescale_intensity(raster, in_range=(plow, phigh))
@@ -146,7 +150,7 @@ class RasterDetector():
 
             rasters_eq = []
             for i, raster in enumerate([raster1, raster2, raster3]):
-                if self.raster_layers[i] is not 'blank':
+                if self.raster_layers[i] != 'blank':
 
                     if self.doHisteq[i]:
                         raster_eq = exposure.equalize_hist(raster)

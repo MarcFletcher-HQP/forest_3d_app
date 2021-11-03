@@ -138,7 +138,8 @@ def boundingBox_to_3dcoords(boxes_, gridSize_, gridRes_, windowSize_, pcdCenter_
     # center in OG
     bb_coord -= (np.tile(gridSize_[::-1], (N, 2)) / 2)
     # convert to meters
-    bb_coord *= gridRes_
+    bb_coord[:,(1,0)] = np.multiply(bb_coord[:,(1,0)], gridRes_[0:2])
+    bb_coord[:,(3,2)] = np.multiply(bb_coord[:,(3,2)], gridRes_[0:2])
     # offset to match raster center with pcd center
     bb_coord += np.tile(pcdCenter_, (N, 2))
     # re-order so it is [ymin xmin ymax xmax]
