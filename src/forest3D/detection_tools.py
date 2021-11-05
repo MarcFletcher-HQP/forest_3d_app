@@ -207,9 +207,9 @@ def label_pcd_from_bbox_indexed(pcd,boxes,classes=None, yxyx = False):
     if yxyx is True:
         boxes = boxes[:, [1, 3, 0, 2]]
 
-    labels = np.zeros(len(pcd), dtype=int)
+    labels = np.zeros(len(pcd.data), dtype=int)
     if classes is not None:
-        class_labels = np.zeros(len(pcd), dtype=int)
+        class_labels = np.zeros(len(pcd.data), dtype=int)
     
     for i,[xmin, xmax, ymin, ymax] in enumerate(boxes):
         idx = pcd.points_index_in_box(xmin, ymin, xmax, ymax)

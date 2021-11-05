@@ -12,11 +12,18 @@ from forest3D.object_detectors import detectObjects_yolov3 as detectObjects
 from forest3D.IndexedPCD import IndexedPCD
 
 # standard libaries
-import numpy as np
-import sys
-import matplotlib.pyplot as plt
-from skimage import exposure
 import os
+import sys
+import numpy as np
+import warnings
+import matplotlib.pyplot as plt
+import concurrent.futures as future
+from skimage import exposure
+
+
+
+warnings.warn("The forest3D.treeDetector module has methods that use the concurrent.futures module.\nWindows users remember to use a main-module header guard.",  )
+
 
 
 class RasterDetector():
@@ -47,6 +54,7 @@ class RasterDetector():
 
         assert(len(gridSize) == 3)
         self.gridSize = np.array(gridSize)
+
 
     def sliding_window_indexed(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, windowSize=[100, 100], stepSize=80,
                                classID=0, confidence_thresh=0.5, overlap_thresh=5, returnBoxes=False,
@@ -121,6 +129,73 @@ class RasterDetector():
             labels = detection_tools.label_pcd_from_bbox_indexed(
                 xyz_clr_data, box_store[:, [1, 3, 0, 2]])
             return labels
+    
+    
+    
+    def sliding_window_future(self, detector_addr, xyz_data, colour_data=None, 
+                              ground_pts=None, windowSize=[100, 100], stepSize=80,
+                              classID=0, confidence_thresh=0.5, overlap_thresh=5, 
+                              returnBoxes=False, max_cores = 1, 
+                              spatialIndex="QuadTree"):
+
+        if colour_data is None:
+            xyz_clr_data = xyz_data
+        elif len(np.shape(colour_data)) == 1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:, np.newaxis]))
+        elif len(np.shape(colour_data)) == 2:
+            xyz_clr_data = np.hstack((xyz_data, colour_data))
+
+        xyz_clr_data = IndexedPCD(
+            np_arr = xyz_clr_data, 
+            gridSize = [windowSize[0] - stepSize, windowSize[1] - stepSize], 
+            method = spatialIndex
+        )
+        
+        aoi_list = detection_tools.create_all_windows(xyz_clr_data, stepSize, windowSize)
+
+
+        # Process each window in parallel
+        with future.ProcessPoolExecutor(max_workers = max_cores) as executor:
+          
+          # Initialise process class
+          process_window = ProcessWindow(
+            self, detector_addr, ground_pts, windowSize, 
+            classID, confidence_thresh, overlap_thresh
+          )
+          
+          # Iterate over the aoi_list
+          boxes = executor.map(process_window, [xyz_clr_data.points_in_aoi(aoi) for aoi in aoi_list])
+        
+        
+        counter = 0
+        totalCount = len(aoi_list)
+        box_store = np.zeros((1, 4))
+        for box in boxes:
+            
+            # track progress
+            counter = counter + 1
+            sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
+            sys.stdout.flush()
+            
+            if (box is not None) and (box.shape[0] > 0):
+                box_store = np.vstack((box_store, box))
+        
+        
+        sys.stdout.write("\n")
+        box_store = box_store[1:, :]
+
+        # remove overlapping boxes
+        idx = detection_tools.find_unique_boxes2(box_store, overlap_thresh)
+        box_store = box_store[idx, :]
+
+        if returnBoxes:
+            return box_store
+        else:
+            # label points in pcd according to which bounding box they are in.
+            labels = detection_tools.label_pcd_from_bbox_indexed(xyz_clr_data, box_store[:, [1, 3, 0, 2]])
+            return labels
+    
+    
 
 
     def sliding_window(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, windowSize=[100, 100], stepSize=80,
@@ -354,3 +429,55 @@ def pcd2rasterCoords(pts, gridSize, res, centre):
         coords['z'] = np.array(np.clip(np.floor(
             (centred_pts[:, 2] - (-gridSize[2] / 2. * res[2])) / res[2]), 0, gridSize[2] - 1), dtype=int)
     return coords
+
+
+
+## Since map has limitations on how arguments are passed to a method, it seemed
+## easier to just instantiate a class with all the stuff that doesn't change
+## from one sliding window to the next.
+class ProcessWindow:
+      
+    def __init__(self, raster_detector, detector_addr, ground_pts = None, 
+                windowSize = [100, 100], classID = 0, confidence_thresh = 0.5, 
+                overlap_thresh = 5):
+      
+      self.raster_detector = raster_detector
+      self.detector_addr = detector_addr
+      self.ground_pts = ground_pts
+      self.windowSize = windowSize
+      self.classID = classID
+      self.confidence_thresh = confidence_thresh
+      self.overlap_thresh = overlap_thresh
+      
+      self.addr_weights = os.path.join(self.detector_addr, 'yolov3.weights')
+      self.addr_config = os.path.join(self.detector_addr, 'yolov3.cfg')
+    
+    
+    def __call__(self, window):
+      
+        if len(window) > 0:
+          
+          raster_stack,centre = self.raster_detector._rasterise(window, ground_pts = self.ground_pts)
+          raster_stack = np.uint8(raster_stack * 255)
+    
+          # use object detector to detect trees in raster
+          [img, boxes, classes, scores] = detectObjects(raster_stack, 
+                                            addr_weights = self.addr_weights,
+                                            addr_confg = self.addr_config, 
+                                            MIN_CONFIDENCE = self.confidence_thresh
+                                          )
+    
+          if np.shape(boxes)[0] == 0:
+              return None
+          
+          
+          # convert raster coordinates of bounding boxes to global x y coordinates
+          bb_coord = detection_tools.boundingBox_to_3dcoords(
+                      boxes_ = boxes, 
+                      gridSize_ = self.raster_detector.gridSize[0:2], 
+                      gridRes_ = self.raster_detector.res, 
+                      windowSize_ = self.windowSize, 
+                      pcdCenter_ = centre
+                    )
+          
+        return bb_coord[classes == self.classID, :]
