@@ -8,8 +8,6 @@ Created on Sat Oct 30 02:12:40 2021
 """
 
 import numpy as np
-import warnings
-from itertools import chain
 from collections import deque
 
 
@@ -23,9 +21,9 @@ class IndexedPCD:
         self.xmin, self.ymin = np.min(np_arr, axis = 0)[:2]
         self.xmax, self.ymax = np.max(np_arr, axis = 0)[:2]
 
-        if method == "Grid":
-            self.index = Grid(np_arr, gridSize)    
-        elif method == "QuadTree":
+        
+        # Any additional methods must come equiped with 
+        if method == "QuadTree":
             self.index = QuadTree.from_np_array(np_arr, gridSize)
         else:
             raise ValueError("Invalid method: %s" % str(method))
@@ -33,14 +31,21 @@ class IndexedPCD:
         self.data = np_arr
     
     
-    def __len__(self):
-        return len(self.data)
+    @staticmethod
+    def check_index_class(obj):
+        
+        check_attr(obj, "block_area")
+        check_attr(obj, "aoi_contained_proper_nodes")
+        check_attr(obj, "aoi_boundary_nodes")
+        check_attr(obj, "points_in_aoi")
+        
     
-    
+    ## In case it's more convenient to provide coordinates than an AOI object
     def points_index_in_box(self, xmin, ymin, xmax, ymax):
         box = AOI(xmin, ymin, xmax, ymax)
         return self.points_in_aoi_idx(box)
     
+    ## In case it's more convenient to provide coordinates than an AOI object
     def points_in_box(self, xmin, ymin, xmax, ymax):
         box = AOI(xmin, ymin, xmax, ymax)
         return self.points_in_aoi(box)
@@ -79,8 +84,14 @@ class IndexedPCD:
         return np.concatenate((idx_contained, idx_boundary))
 
     
-
-
+## Utility function for making sure that the class stored in IndexedPCD.index 
+## has all the necessary attributes, and that they are callable.
+def check_attr(obj, fun_name):
+    fun = getattr(obj, fun_name)
+    if not callable(fun):
+        raise AttributeError("obj.%s is not callable" % fun_name)
+    
+    return True
 
 
 
@@ -89,8 +100,11 @@ class IndexedPCD:
 # number of points, this version splits until a minimum spatial extent is 
 # reached.
 class QuadTree:
-  
-    # Initialisers
+    
+    ##################
+    ## Initialisers ##
+    ##################
+    
     def __init__(self, extent, minSize = [1, 1]):
         
         self.min_width, self.min_height = minSize
@@ -121,13 +135,17 @@ class QuadTree:
         return tree
     
     
+    ####################
+    ## Public Methods ##
+    ####################
+    
+    ## Area of the smallest leaf node. Technically a lower-bound, would prefer 
+    ## to avoid searching the whole tree for the smallest leaf-node.
     def block_area(self):
-        
-        # technically a lower-bound, would prefer to avoid searching the whole
-        # tree for the smallest leaf-node.
         return self.min_width * self.min_height
     
     
+    ## Return indices for all leaf nodes that intersect with the AOI.
     def points_in_aoi(self, aoi):
     
         found_points = deque([])
@@ -152,6 +170,8 @@ class QuadTree:
         return found_points
     
     
+    ## Return indices for all leaf nodes that are strictly internal to the AOI,
+    ## i.e. nodes in the AOI that do not intersect the boundary.
     def aoi_contains_proper_nodes(self, aoi):
         
         found_points = deque([])
@@ -175,6 +195,8 @@ class QuadTree:
         return found_points
     
     
+    ## Return indices for all leaf nodes that intersect with the boundary of 
+    ## the AOI.
     def aoi_boundary_nodes(self, aoi):
         
         found_points = deque([])
@@ -191,13 +213,15 @@ class QuadTree:
         return found_points
 
 
-
+    ######################
     ## Internal Methods ##
+    ######################
     
     def children(self):
         return self.sw, self.nw, self.ne, self.se
   
     
+    ## Retrieve index for all leaf-nodes below this point in the tree
     def get_points(self):
         
         found_points = deque([])
@@ -211,6 +235,8 @@ class QuadTree:
         return found_points
     
     
+    ## Check whether it's possible to split this node, i.e. without creating
+    ## nodes that are too small.
     def can_split(self):
     
         if(not self.has_children):
@@ -220,6 +246,7 @@ class QuadTree:
           return (not self.has_children and not self.minimum_extent)
     
     
+    ## Split this node of the QuadTree into quadrants
     def split(self):
     
         # Get centre of the bounding box
@@ -237,6 +264,7 @@ class QuadTree:
         return None
         
         
+    ## Find the child node that contains the specified point.
     def child_containing(self, x, y):
     
         child = None
@@ -249,6 +277,8 @@ class QuadTree:
         return child
     
     
+    ## The slow way to insert points; if you have a large number of points then
+    ## put them in a numpy array and use bulk_insert.
     def insert(self, x, y, i):
     
         if(not self.extent.contains_point(x, y)):
@@ -266,6 +296,8 @@ class QuadTree:
         return True
     
     
+    ## Because inserting the rows of a numpy array one at a time, with insert,
+    ## is terribly slow.
     def bulk_insert(self, x, y, i):
         
         if self.can_split():
@@ -282,147 +314,12 @@ class QuadTree:
         
         return True
         
-        
-        
-
-
-
-
-
-class Grid:
-    
-    def __init__(self, np_arr, gridSize = [1, 1]):
-        
-        self.xmin, self.ymin = np.floor(np.min(np_arr, axis = 0))[:2]
-        self.xmax, self.ymax = np.ceil(np.max(np_arr, axis = 0))[:2]
-        
-        self.res_x, self.res_y = gridSize
-        
-        self.steps_x = (self.xmax // self.res_x) - (self.xmin // self.res_x)
-        self.steps_y = (self.ymax // self.res_y) - (self.ymin // self.res_y)
-
-        grid_idx = self.point_in_cell(np_arr[:,0], np_arr[:,1])
-
-        pt_order = grid_idx.argsort()
-        grid_idx.sort()
-
-        self.cells = np.unique(grid_idx).astype(int)       
-        self.index = {i: pt_order[grid_idx == i] for i in self.cells}
-
-    
-    ## Public facing methods ##
-    
-    def block_area(self):
-        return self.res_x * self.res_y
-    
-    def points_in_aoi(self, aoi):
-        
-        cells_list = self.cells_in_aoi(aoi)
-        
-        index = np.array([])
-        if(len(cells_list) > 0):
-            index = np.concatenate([self.index[cell] for cell in cells_list])
-        
-        return index.astype(int)
-    
-    
-    def aoi_contains_proper_nodes(self, aoi):
-        
-        cells_list = list(set(self.cells_in_aoi(aoi)) - set(self.cells_on_boundary(aoi)))
-        
-        index = np.array([])
-        if(len(cells_list) > 0):
-            index = np.concatenate([self.index[cell] for cell in cells_list])
-        
-        return index.astype(int)
-    
-    
-    def aoi_boundary_nodes(self, aoi):
-        
-        cells_list = self.cells_on_boundary(aoi)
-        
-        index = np.array([])
-        if(len(cells_list) > 0):
-            index = np.concatenate([self.index[cell] for cell in cells_list])
-        
-        return index.astype(int)
-    
-    
-    
-    ## Internal Methods ##
-    
-    def point_in_cell(self, x, y):
-        
-        pt_idx = (x - self.xmin) // self.res_x +        \
-            (self.steps_x + 1) * ((y - self.ymin) // self.res_y)
-        
-        return pt_idx
-    
-    
-    def cells_in_aoi(self, aoi):
-        
-        idx_first = self.point_in_cell(aoi.xmin, aoi.ymin)
-
-        if (idx_first < 0 and ((round(aoi.xmin, 0) < self.xmin) or (round(aoi.ymin) < self.ymin))):
-            warnings.warn("Vertex of AOI is outside grid extent: (%.4f, %.4f)" % (aoi.xmin, aoi.ymin))
-            idx_first = 0
-
-        size_x = (aoi.xmax - self.xmin) // self.res_x -     \
-            (aoi.xmin - self.xmin) // self.res_x
-        size_y = (aoi.ymax - self.ymin) // self.res_y -     \
-            (aoi.ymin - self.ymin) // self.res_y
-
-        if (size_x < 0) or (size_y < 0):
-            raise ValueError("extent of box is negative in grid-coords?")
-
-        # 1. List all cells (in the box) along the first row along the x-axis
-        # 2. List all cells (in the box) above each cell listed in step 1.
-        cells_list = list(
-            chain.from_iterable(
-                [np.arange(x, x + (self.steps_x + 1) * (size_y + 1), self.steps_x + 1)
-                 for x in (idx_first + np.arange(size_x + 1))]
-            )
-        )
-
-        cells_list = np.unique(cells_list).astype(int)
-        return cells_list[np.isin(cells_list, self.cells)]
-    
-    
-    def cells_on_boundary(self, aoi):
-        
-        idx_first = self.point_in_cell(aoi.xmin, aoi.ymin)
-
-        if (idx_first < 0 and ((round(aoi.xmin, 0) < self.xmin) or (round(aoi.ymin) < self.ymin))):
-            warnings.warn("Vertex of AOI is outside grid extent: (%.4f, %.4f)" % (aoi.xmin, aoi.ymin))
-            idx_first = 0
-
-        size_x = (aoi.xmax - self.xmin) // self.res_x -     \
-            (aoi.xmin - self.xmin) // self.res_x
-        size_y = (aoi.ymax - self.ymin) // self.res_y -     \
-            (aoi.ymin - self.ymin) // self.res_y
-
-        if (size_x < 0) or (size_y < 0):
-            raise ValueError("extent of box is negative in grid-coords?")
-
-        
-        base = idx_first + np.arange(size_x + 1)
-        top  = (self.steps_x + 1) * size_y + base
-        left = idx_first + np.arange(0, (self.steps_x + 1) * size_y + 1, self.steps_x + 1)
-        right = idx_first + size_x + np.arange(0, (self.steps_x + 1) * size_y + 1, self.steps_x + 1)
-        
-
-        cells_list = np.concatenate((base, left, right, top))
-        cells_list = np.unique(cells_list).astype(int)
-        return cells_list[np.isin(cells_list, self.cells)]
-
-
 
 
 
 # Class to represent a (2D) spatial extent.
 class AOI:
 
-    # Initialisers
     def __init__(self, xmin, ymin, xmax, ymax):
         swap_x = xmax < xmin
         swap_y = ymax < ymin
@@ -439,16 +336,11 @@ class AOI:
         self.ymax = ymax
     
     
-    @staticmethod
-    def coords(aoi):
-        try: 
-            xmin, ymin, xmax, ymax = aoi.xmin, aoi.ymin, aoi.xmax, aoi.ymax
-        except AttributeError:
-            xmin, ymin, xmax, ymax = aoi
-        
-        return xmin, ymin, xmax, ymax
+    def coords(self):
+        return self.xmin, self.ymin, self.xmax, self.ymax
     
     
+    ## Divide this rectangle into quadrants, used by QuadTree
     def quadrants(self):
         xmid, ymid = self.centre()
         return (AOI(self.xmin, self.ymin, xmid, ymid), 
@@ -468,15 +360,19 @@ class AOI:
     
     def area(self):
         return self.width() * self.height()
-
-
-    # Comparators
+    
+    ## Check whether the point intersects with self, either internally or with
+    ## the boundary.
     def contains_point(self, x, y):
         return (self.xmin <= x) & (self.ymin <= y) & (self.xmax >= x) & (self.ymax >= y)
     
+    
+    ## Check whether the point is an internal point
     def contains_proper_point(self, x, y):
         return (self.xmin < x) & (self.ymin < y) & (self.xmax > x) & (self.ymax > y)
     
+    
+    ## Check whether all points internal to "other" intersect with "self"
     def contains(self, other):
         try:
             xmin, ymin, xmax, ymax = AOI.coords(other)
@@ -485,16 +381,21 @@ class AOI:
         
         return self.contains_point(xmin, ymin) and self.contains_point(xmax, ymax)
     
+    
+    ## Check whether the "other" rectangle is contained entirely within "self".
     def contains_proper(self, other):
         try:
-            xmin, ymin, xmax, ymax = AOI.coords(other)
+            xmin, ymin, xmax, ymax = other.coords()
         except AttributeError:
             xmin, ymin, xmax, ymax = other
         
         return self.contains_proper_point(xmin, ymin) and self.contains_proper_point(xmax, ymax)
 
+
+    ## Check whether the "other" rectangle intersects with the internal points,
+    ## or boundary of "self"
     def intersects(self, other):
-        xmin, ymin, xmax, ymax = AOI.coords(other)
+        xmin, ymin, xmax, ymax = other.coords()
         
         if (xmin >= self.xmax) or (self.xmin >= xmax):
             return False
@@ -503,8 +404,10 @@ class AOI:
             return False
         
         return True
-        
+      
     
+    ## Create the rectangle representing all points in common between the two
+    ## rectangles.
     def intersection(self, other):
         
         if not self.intersects(other):
@@ -526,6 +429,9 @@ class AOI:
         
         return AOI(xmin, ymin, xmax, ymax)
     
+    
+    ## Calculate the quotient of the area of intersection with the area of the
+    ## union. Not used for any specific reason, might be handy later.
     def iou(self, other):
         
         common = self.intersection(other)

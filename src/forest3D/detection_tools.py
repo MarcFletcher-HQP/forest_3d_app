@@ -194,7 +194,7 @@ def label_pcd_from_bbox(pcd,boxes,classes=None, yxyx=False):
     else:
         return labels
 
-def label_pcd_by_bbox(pcd,boxes,classes=None, yxyx = False):
+def label_pcd_from_bbox_indexed(pcd,boxes,classes=None, yxyx = False):
     '''
 
     :param pcd: IndexedPCD

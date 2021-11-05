@@ -7,7 +7,7 @@
 '''
 
 # custom libraries
-from forest3D import detection_tools,processLidar
+from forest3D import detection_tools, processLidar
 from forest3D.object_detectors import detectObjects_yolov3 as detectObjects
 from forest3D.IndexedPCD import IndexedPCD
 
@@ -18,50 +18,52 @@ import matplotlib.pyplot as plt
 from skimage import exposure
 import os
 
+
 class RasterDetector():
 
-    def __init__(self, raster_layers, support_window=[1,1,1],normalisation='rescale',doHisteq=[True,True,True],res=[0.2,0.2,0.2],gridSize=[600, 600, 1000] ):
+    def __init__(self, raster_layers, support_window=[1, 1, 1], normalisation='rescale', doHisteq=[True, True, True], res=[0.2, 0.2, 0.2], gridSize=[600, 600, 1000]):
 
-        self.raster_layers = ['blank','blank','blank']
+        self.raster_layers = ['blank', 'blank', 'blank']
 
-        for i,layer_name in enumerate(raster_layers):
+        for i, layer_name in enumerate(raster_layers):
             self.raster_layers[i] = layer_name
 
-        self.support_window = [1,1,1]
+        self.support_window = [1, 1, 1]
 
-        for i,val in enumerate(support_window):
+        for i, val in enumerate(support_window):
             self.support_window[i] = val
 
         self.normalisation = normalisation
 
-        self.doHisteq = [1,1,1]
+        self.doHisteq = [1, 1, 1]
         for i, val in enumerate(doHisteq):
             self.doHisteq[i] = val
 
         # Continuity with previous behaviour (supplying a single float)
         if isinstance(res, float):
             res = [res, res, res]
-        
+
         self.res = res
 
-        assert(len(gridSize)==3)
+        assert(len(gridSize) == 3)
         self.gridSize = np.array(gridSize)
 
-    def sliding_window(self,detector_addr,xyz_data,colour_data=None,ground_pts=None,windowSize = [100,100],stepSize = 80,
-                       classID=0,confidence_thresh=0.5,overlap_thresh=5,returnBoxes=False,
-                       spatialIndex = "Grid"):
+    def sliding_window_indexed(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, windowSize=[100, 100], stepSize=80,
+                               classID=0, confidence_thresh=0.5, overlap_thresh=5, returnBoxes=False,
+                               spatialIndex="QuadTree"):
 
         if colour_data is None:
             xyz_clr_data = xyz_data
-        elif len(np.shape(colour_data))==1:
-            xyz_clr_data = np.hstack((xyz_data, colour_data[:,np.newaxis]))
+        elif len(np.shape(colour_data)) == 1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:, np.newaxis]))
         elif len(np.shape(colour_data)) == 2:
             xyz_clr_data = np.hstack((xyz_data, colour_data))
 
-        
-        xyz_clr_data = IndexedPCD(xyz_clr_data, [windowSize[0] - stepSize, windowSize[1] - stepSize], spatialIndex)
-        aoi_list = detection_tools.create_all_windows(xyz_clr_data, stepSize, windowSize)
-        
+        xyz_clr_data = IndexedPCD(
+            xyz_clr_data, [windowSize[0] - stepSize, windowSize[1] - stepSize], spatialIndex)
+        aoi_list = detection_tools.create_all_windows(
+            xyz_clr_data, stepSize, windowSize)
+
         box_store = np.zeros((1, 4))
         totalCount = len(aoi_list)
         counter = 0
@@ -71,97 +73,99 @@ class RasterDetector():
             window = xyz_clr_data.points_in_aoi(aoi)
 
             # track progress
-            counter = counter + 1        
+            counter = counter + 1
             sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
             sys.stdout.flush()
 
             if len(window) > 0:
 
-                raster_stack,centre = self._rasterise(window, ground_pts=ground_pts)
+                raster_stack, centre = self._rasterise(
+                    window, ground_pts=ground_pts)
                 raster_stack = np.uint8(raster_stack*255)
 
                 # use object detector to detect trees in raster
                 [img, boxes, classes, scores] = detectObjects(
-                    raster_stack, 
-                    addr_weights=os.path.join(detector_addr,'yolov3.weights'),
-                    addr_confg=os.path.join(detector_addr,'yolov3.cfg'),
-                    MIN_CONFIDENCE = confidence_thresh
+                    raster_stack,
+                    addr_weights=os.path.join(detector_addr, 'yolov3.weights'),
+                    addr_confg=os.path.join(detector_addr, 'yolov3.cfg'),
+                    MIN_CONFIDENCE=confidence_thresh
                 )
 
                 if np.shape(boxes)[0]:
 
                     # convert raster coordinates of bounding boxes to global x y coordinates
                     bb_coord = detection_tools.boundingBox_to_3dcoords(
-                        boxes_= boxes, 
-                        gridSize_ = self.gridSize[0:2], 
-                        gridRes_ = self.res,
-                        windowSize_ = windowSize, 
+                        boxes_=boxes,
+                        gridSize_=self.gridSize[0:2],
+                        gridRes_=self.res,
+                        windowSize_=windowSize,
                         pcdCenter_=centre
                     )
 
                     # aggregate over windows
-                    box_store = np.vstack((box_store, bb_coord[classes == classID, :]))
+                    box_store = np.vstack(
+                        (box_store, bb_coord[classes == classID, :]))
 
-        
         sys.stdout.write("\n")
         box_store = box_store[1:, :]
 
         # remove overlapping boxes
         idx = detection_tools.find_unique_boxes2(box_store, overlap_thresh)
         box_store = box_store[idx, :]
-
 
         if returnBoxes:
             return box_store
         else:
             # label points in pcd according to which bounding box they are in.
             # return labels in the same order as the point-cloud provided.
-            labels = detection_tools.label_pcd_by_bbox(xyz_clr_data, box_store[:, [1, 3, 0, 2]])
+            labels = detection_tools.label_pcd_from_bbox_indexed(
+                xyz_clr_data, box_store[:, [1, 3, 0, 2]])
             return labels
-    
-    
-    def sliding_window_old(self,detector_addr,xyz_data,colour_data=None,ground_pts=None,windowSize = [100,100],stepSize = 80,
-                       classID=0,confidence_thresh=0.5,overlap_thresh=5,returnBoxes=False):
+
+
+    def sliding_window(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, windowSize=[100, 100], stepSize=80,
+                       classID=0, confidence_thresh=0.5, overlap_thresh=5, returnBoxes=False):
 
         if colour_data is None:
             xyz_clr_data = xyz_data
-        elif len(np.shape(colour_data))==1:
-            xyz_clr_data = np.hstack((xyz_data, colour_data[:,np.newaxis]))
+        elif len(np.shape(colour_data)) == 1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:, np.newaxis]))
         elif len(np.shape(colour_data)) == 2:
             xyz_clr_data = np.hstack((xyz_data, colour_data))
 
         box_store = np.zeros((1, 4))
         counter = 0
 
-        for (x, y, window) in detection_tools.sliding_window_3d(xyz_clr_data, stepSize=stepSize,windowSize=windowSize):  # stepsize 100
+        for (x, y, window) in detection_tools.sliding_window_3d(xyz_clr_data, stepSize=stepSize, windowSize=windowSize):  # stepsize 100
 
             # track progress
             counter = counter + 1
-            totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])),stepSize)) * \
-                         len(range(int(np.min(xyz_data[:, 1])), int(np.max(xyz_data[:, 1])),stepSize))
+            totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])), stepSize)) * \
+                len(range(int(np.min(xyz_data[:, 1])), int(
+                    np.max(xyz_data[:, 1])), stepSize))
             sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
             sys.stdout.flush()
 
-
             if window is not None:
 
-                raster_stack,centre = self._rasterise(window, ground_pts=ground_pts)
+                raster_stack, centre = self._rasterise(
+                    window, ground_pts=ground_pts)
                 raster_stack = np.uint8(raster_stack*255)
 
                 # use object detector to detect trees in raster
-                [img, boxes, classes, scores] = detectObjects(raster_stack, addr_weights=os.path.join(detector_addr,'yolov3.weights'),
-                                                              addr_confg=os.path.join(detector_addr,'yolov3.cfg'),MIN_CONFIDENCE=confidence_thresh)
+                [img, boxes, classes, scores] = detectObjects(raster_stack, addr_weights=os.path.join(detector_addr, 'yolov3.weights'),
+                                                              addr_confg=os.path.join(detector_addr, 'yolov3.cfg'), MIN_CONFIDENCE=confidence_thresh)
 
                 if np.shape(boxes)[0]:
 
                     # convert raster coordinates of bounding boxes to global x y coordinates
                     bb_coord = detection_tools.boundingBox_to_3dcoords(boxes_=boxes, gridSize_=self.gridSize[0:2], gridRes_=self.res,
-                                                                      windowSize_=windowSize, pcdCenter_=centre)
+                                                                       windowSize_=windowSize, pcdCenter_=centre)
 
                     # aggregate over windows
-                    box_store = np.vstack((box_store, bb_coord[classes == classID, :]))
+                    box_store = np.vstack(
+                        (box_store, bb_coord[classes == classID, :]))
 
-        
         sys.stdout.write("\n")
         box_store = box_store[1:, :]
 
@@ -173,32 +177,30 @@ class RasterDetector():
 
             return box_store
         else:
-            # # label points in pcd according to which bounding box they are in
-            labels = detection_tools.label_pcd_from_bbox(xyz_clr_data, box_store[:, [1, 3, 0, 2]])
+            # label points in pcd according to which bounding box they are in
+            labels = detection_tools.label_pcd_from_bbox(
+                xyz_clr_data, box_store[:, [1, 3, 0, 2]])
 
             return labels
-              
 
-
-
-    def rasterise(self,xyz_data,colour_data=None,ground_pts=None,returnCentre=False):
+    def rasterise(self, xyz_data, colour_data=None, ground_pts=None, returnCentre=False):
 
         if colour_data is None:
             xyz_clr_data = xyz_data
-        elif len(np.shape(colour_data))==1:
-            xyz_clr_data = np.hstack((xyz_data, colour_data[:,np.newaxis]))
+        elif len(np.shape(colour_data)) == 1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:, np.newaxis]))
         elif len(np.shape(colour_data)) == 2:
             xyz_clr_data = np.hstack((xyz_data, colour_data))
 
-        raster_stack, centre = self._rasterise(xyz_clr_data, ground_pts=ground_pts)
+        raster_stack, centre = self._rasterise(
+            xyz_clr_data, ground_pts=ground_pts)
 
         if returnCentre:
             return raster_stack, centre
         else:
             return raster_stack
 
-
-    def _rasterise(self,data,ground_pts=None):
+    def _rasterise(self, data, ground_pts=None):
 
         # create raster layers
         raster1, centre = get_raster(self.raster_layers[0], data.copy(), self.support_window[0], self.res,
@@ -213,15 +215,17 @@ class RasterDetector():
 
             rasters_eq = []
             for i, raster in enumerate([raster1, raster2, raster3]):
-                if self.raster_layers[i] != 'blank':    # IDE complains about use of 'is not'
+                # IDE complains about use of 'is not'
+                if self.raster_layers[i] != 'blank':
 
                     plow, phigh = np.percentile(raster, (0, 100))
-                    raster = exposure.rescale_intensity(raster, in_range=(plow, phigh))
+                    raster = exposure.rescale_intensity(
+                        raster, in_range=(plow, phigh))
                     rasters_eq.append(raster)
                 else:
                     rasters_eq.append(raster)
-            raster_stack = np.stack((rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
-
+            raster_stack = np.stack(
+                (rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
 
         if self.normalisation == 'rescale+histeq':
 
@@ -234,64 +238,66 @@ class RasterDetector():
                     else:
                         raster_eq = raster
                     plow, phigh = np.percentile(raster_eq, (0, 100))
-                    raster_eq = exposure.rescale_intensity(raster_eq, in_range=(plow, phigh))
+                    raster_eq = exposure.rescale_intensity(
+                        raster_eq, in_range=(plow, phigh))
                     rasters_eq.append(raster_eq)
                 else:
                     rasters_eq.append(raster)
-            raster_stack = np.stack((rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
-
+            raster_stack = np.stack(
+                (rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
 
         elif self.normalisation == 'cmap_jet':
 
-            assert ((self.raster_layers[1] == 'blank') & (self.raster_layers[2] == 'blank'))
+            assert ((self.raster_layers[1] == 'blank') & (
+                self.raster_layers[2] == 'blank'))
 
             cmap = plt.cm.jet
             norm = plt.Normalize(vmin=raster1.min(), vmax=raster1.max())
             raster_stack = cmap(norm(raster1))[..., 0:3]
 
-        return raster_stack,centre
+        return raster_stack, centre
 
 
-def get_raster(method_name,data,support_window,res,gridSize,ground_pts=None):
+def get_raster(method_name, data, support_window, res, gridSize, ground_pts=None):
 
     if method_name == 'vertical_density':
         PCD = processLidar.ProcessPC(data[:, :3])
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.vertical_density(support_window=support_window)
 
-        return PCD.bev_verticalDensity,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_verticalDensity, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'mean_colour1':
-        PCD = processLidar.ProcessPC(data[:, :3],pc_returns=(data[:, 3]))
+        PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 3]))
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.occupancyGrid_Returns()
         PCD.mean_returns(support_window=support_window)
 
-        return PCD.bev_meanReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_meanReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'mean_colour2':
-        PCD = processLidar.ProcessPC(data[:, :3],pc_returns=(data[:, 4]))
+        PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 4]))
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.occupancyGrid_Returns()
         PCD.mean_returns(support_window=support_window)
 
-        return PCD.bev_meanReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_meanReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'mean_colour3':
-        PCD = processLidar.ProcessPC(data[:, :3],pc_returns=(data[:, 5]))
+        PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 5]))
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.occupancyGrid_Returns()
         PCD.mean_returns(support_window=support_window)
 
-        return PCD.bev_meanReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_meanReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'max_colour1':
-        PCD = processLidar.ProcessPC(data[:, :3],pc_returns=(data[:, 3]))
+        PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 3]))
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.occupancyGrid_Returns()
         PCD.max_returns(support_window=support_window)
 
-        return PCD.bev_maxReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_maxReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'max_colour2':
         PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 4]))
@@ -299,7 +305,7 @@ def get_raster(method_name,data,support_window,res,gridSize,ground_pts=None):
         PCD.occupancyGrid_Returns()
         PCD.max_returns(support_window=support_window)
 
-        return PCD.bev_maxReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_maxReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'max_colour3':
         PCD = processLidar.ProcessPC(data[:, :3], pc_returns=(data[:, 5]))
@@ -307,14 +313,14 @@ def get_raster(method_name,data,support_window,res,gridSize,ground_pts=None):
         PCD.occupancyGrid_Returns()
         PCD.max_returns(support_window=support_window)
 
-        return PCD.bev_maxReturn,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_maxReturn, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'max_height':
         PCD = processLidar.ProcessPC(data[:, :3])
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.max_height(support_window=support_window)
 
-        return PCD.bev_maxHeight,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_maxHeight, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'canopy_height':
         PCD = processLidar.ProcessPC(data[:, :3])
@@ -322,26 +328,29 @@ def get_raster(method_name,data,support_window,res,gridSize,ground_pts=None):
         PCD.occupancyGrid_Binary(res_=res, gridSize_=gridSize)
         PCD.max_height(support_window=support_window)
 
-        return PCD.bev_maxHeight,PCD._ProcessPC__centre[0:2]
+        return PCD.bev_maxHeight, PCD._ProcessPC__centre[0:2]
 
     elif method_name == 'blank':
 
-        return 0.5 * np.ones((gridSize[:2])),None
+        return 0.5 * np.ones((gridSize[:2])), None
 
 
-def pcd2rasterCoords(pts,gridSize,res,centre):
+def pcd2rasterCoords(pts, gridSize, res, centre):
     # make sure to pass in pts with shape [numSamples x numCoordinates]
     # returns dictionary with 'col' and 'row' elements, which are 1d np.arrays
 
     if np.shape(res) == ():
-        res = np.tile(res,(np.shape(pts)[1]))
+        res = np.tile(res, (np.shape(pts)[1]))
 
     centred_pts = pts - centre[:np.shape(pts)[1]]
 
     # note: x point corresponds to row (first index) in the og grid -> therefore y (and vice-versa for y)
     coords = {}
-    coords['row'] = np.array( np.clip( np.floor( ( centred_pts[:,0]-(-gridSize[0]/2.*res[0]) )/res[0] ), 0, gridSize[0]-1 ), dtype=int) #y
-    coords['col'] = np.array( np.clip( np.floor( ( centred_pts[:,1]-(-gridSize[1]/2.*res[1]) )/res[1] ), 0, gridSize[1]-1 ), dtype=int) #x
+    coords['row'] = np.array(np.clip(np.floor(
+        (centred_pts[:, 0]-(-gridSize[0]/2.*res[0]))/res[0]), 0, gridSize[0]-1), dtype=int)  # y
+    coords['col'] = np.array(np.clip(np.floor(
+        (centred_pts[:, 1]-(-gridSize[1]/2.*res[1]))/res[1]), 0, gridSize[1]-1), dtype=int)  # x
     if np.shape(pts)[1] == 3:
-        coords['z'] = np.array(np.clip(np.floor((centred_pts[:, 2] - (-gridSize[2] / 2. * res[2])) / res[2]), 0, gridSize[2] - 1),dtype=int)
+        coords['z'] = np.array(np.clip(np.floor(
+            (centred_pts[:, 2] - (-gridSize[2] / 2. * res[2])) / res[2]), 0, gridSize[2] - 1), dtype=int)
     return coords
