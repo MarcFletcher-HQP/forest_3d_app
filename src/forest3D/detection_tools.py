@@ -6,6 +6,7 @@
 
 '''
 
+from forest3D.IndexedPCD import AOI
 
 import numpy as np
 import pickle
@@ -124,6 +125,22 @@ def sliding_window_3d(pcd, stepSize, windowSize):
             # yield the current window
             yield (x, y, extract3d_points( pcd, [x,x+windowSize[0],y,y+windowSize[1]] ) )
 
+
+def create_all_windows(pcd, stepSize, windowSize):
+    
+    try:
+        xmin, ymin, xmax, ymax = pcd.xmin, pcd.ymin, pcd.xmax, pcd.ymax
+    except AttributeError:
+        xmin, ymin, xmax, ymax = pcd
+    
+    yvals = range(int(pcd.ymin), int(pcd.ymax), stepSize)
+    xvals = range(int(pcd.xmin), int(pcd.xmax), stepSize)
+    windows = [[AOI(x, y, x + windowSize[0], y + windowSize[1]) for y in yvals] for x in xvals]
+    windows = [item for sublist in windows for item in sublist]
+    return windows
+
+
+
 def boundingBox_to_3dcoords(boxes_, gridSize_, gridRes_, windowSize_, pcdCenter_):
     # boxes = [ymin xmin ymax xmax] N x 4 (for N bounding boxes)
     # grid size np.array(( x , y )) in pixels (or list)
@@ -176,6 +193,39 @@ def label_pcd_from_bbox(pcd,boxes,classes=None, yxyx=False):
         return labels,class_labels
     else:
         return labels
+
+def label_pcd_by_bbox(pcd,boxes,classes=None, yxyx = False):
+    '''
+
+    :param pcd: IndexedPCD
+    :param boxes: np.array of size Mx4. box order is [x_min, x_max, y_min, y_max]. If want to use [ymin xmin ymax xmax], set yxyx=True
+    :param classes: optional. Pass in stem labels if you want them delineated as well.
+    :param yxyx: (bool)
+    :return:
+    '''
+    
+    if yxyx is True:
+        boxes = boxes[:, [1, 3, 0, 2]]
+
+    labels = np.zeros(len(pcd), dtype=int)
+    if classes is not None:
+        class_labels = np.zeros(len(pcd), dtype=int)
+    
+    for i,[xmin, xmax, ymin, ymax] in enumerate(boxes):
+        idx = pcd.points_index_in_box(xmin, ymin, xmax, ymax)
+        labels[idx] = i+1
+        if classes is not None:
+            class_labels[idx] = classes[i]
+    
+    # dont permute the zero class (anything not in a bbox)
+    label_array = np.hstack(( np.array((0)), np.random.permutation(range(np.max(labels)+1)[1:]) ))
+    labels = label_array[labels]
+
+    if classes is not None:
+        return labels,class_labels
+    else:
+        return labels
+
 
 def save_boxes(addr,boxes):
     # make sure addr has '.pkl'

@@ -9,6 +9,7 @@
 # custom libraries
 from forest3D import detection_tools,processLidar
 from forest3D.object_detectors import detectObjects_yolov3 as detectObjects
+from forest3D.IndexedPCD import IndexedPCD
 
 # standard libaries
 import numpy as np
@@ -47,6 +48,79 @@ class RasterDetector():
         self.gridSize = np.array(gridSize)
 
     def sliding_window(self,detector_addr,xyz_data,colour_data=None,ground_pts=None,windowSize = [100,100],stepSize = 80,
+                       classID=0,confidence_thresh=0.5,overlap_thresh=5,returnBoxes=False,
+                       spatialIndex = "Grid"):
+
+        if colour_data is None:
+            xyz_clr_data = xyz_data
+        elif len(np.shape(colour_data))==1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:,np.newaxis]))
+        elif len(np.shape(colour_data)) == 2:
+            xyz_clr_data = np.hstack((xyz_data, colour_data))
+
+        
+        xyz_clr_data = IndexedPCD(xyz_clr_data, [windowSize[0] - stepSize, windowSize[1] - stepSize], spatialIndex)
+        aoi_list = detection_tools.create_all_windows(xyz_clr_data, stepSize, windowSize)
+        
+        box_store = np.zeros((1, 4))
+        totalCount = len(aoi_list)
+        counter = 0
+
+        for aoi in aoi_list:  # stepsize 100
+
+            window = xyz_clr_data.points_in_aoi(aoi)
+
+            # track progress
+            counter = counter + 1        
+            sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
+            sys.stdout.flush()
+
+            if len(window) > 0:
+
+                raster_stack,centre = self._rasterise(window, ground_pts=ground_pts)
+                raster_stack = np.uint8(raster_stack*255)
+
+                # use object detector to detect trees in raster
+                [img, boxes, classes, scores] = detectObjects(
+                    raster_stack, 
+                    addr_weights=os.path.join(detector_addr,'yolov3.weights'),
+                    addr_confg=os.path.join(detector_addr,'yolov3.cfg'),
+                    MIN_CONFIDENCE = confidence_thresh
+                )
+
+                if np.shape(boxes)[0]:
+
+                    # convert raster coordinates of bounding boxes to global x y coordinates
+                    bb_coord = detection_tools.boundingBox_to_3dcoords(
+                        boxes_= boxes, 
+                        gridSize_ = self.gridSize[0:2], 
+                        gridRes_ = self.res,
+                        windowSize_ = windowSize, 
+                        pcdCenter_=centre
+                    )
+
+                    # aggregate over windows
+                    box_store = np.vstack((box_store, bb_coord[classes == classID, :]))
+
+        
+        sys.stdout.write("\n")
+        box_store = box_store[1:, :]
+
+        # remove overlapping boxes
+        idx = detection_tools.find_unique_boxes2(box_store, overlap_thresh)
+        box_store = box_store[idx, :]
+
+
+        if returnBoxes:
+            return box_store
+        else:
+            # label points in pcd according to which bounding box they are in.
+            # return labels in the same order as the point-cloud provided.
+            labels = detection_tools.label_pcd_by_bbox(xyz_clr_data, box_store[:, [1, 3, 0, 2]])
+            return labels
+    
+    
+    def sliding_window_old(self,detector_addr,xyz_data,colour_data=None,ground_pts=None,windowSize = [100,100],stepSize = 80,
                        classID=0,confidence_thresh=0.5,overlap_thresh=5,returnBoxes=False):
 
         if colour_data is None:
@@ -56,18 +130,18 @@ class RasterDetector():
         elif len(np.shape(colour_data)) == 2:
             xyz_clr_data = np.hstack((xyz_data, colour_data))
 
-        totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])),stepSize)) * \
-                        len(range(int(np.min(xyz_data[:, 1])), int(np.max(xyz_data[:, 1])),stepSize))
-
         box_store = np.zeros((1, 4))
         counter = 0
 
         for (x, y, window) in detection_tools.sliding_window_3d(xyz_clr_data, stepSize=stepSize,windowSize=windowSize):  # stepsize 100
 
             # track progress
-            counter = counter + 1            
+            counter = counter + 1
+            totalCount = len(range(int(np.min(xyz_data[:, 0])), int(np.max(xyz_data[:, 0])),stepSize)) * \
+                         len(range(int(np.min(xyz_data[:, 1])), int(np.max(xyz_data[:, 1])),stepSize))
             sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
             sys.stdout.flush()
+
 
             if window is not None:
 
@@ -87,6 +161,7 @@ class RasterDetector():
                     # aggregate over windows
                     box_store = np.vstack((box_store, bb_coord[classes == classID, :]))
 
+        
         sys.stdout.write("\n")
         box_store = box_store[1:, :]
 
@@ -102,6 +177,8 @@ class RasterDetector():
             labels = detection_tools.label_pcd_from_bbox(xyz_clr_data, box_store[:, [1, 3, 0, 2]])
 
             return labels
+              
+
 
 
     def rasterise(self,xyz_data,colour_data=None,ground_pts=None,returnCentre=False):
