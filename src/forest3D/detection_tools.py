@@ -133,8 +133,8 @@ def create_all_windows(pcd, stepSize, windowSize):
     except AttributeError:
         xmin, ymin, xmax, ymax = pcd
     
-    yvals = range(int(pcd.ymin), int(pcd.ymax), stepSize)
-    xvals = range(int(pcd.xmin), int(pcd.xmax), stepSize)
+    yvals = np.arange(pcd.ymin, pcd.ymax, stepSize)
+    xvals = np.arange(pcd.xmin, pcd.xmax, stepSize)
     windows = [[AOI(x, y, x + windowSize[0], y + windowSize[1]) for y in yvals] for x in xvals]
     windows = [item for sublist in windows for item in sublist]
     return windows
