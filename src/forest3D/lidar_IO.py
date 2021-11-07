@@ -15,8 +15,12 @@ import glob
 from laspy.file import File as Lasfile
 import laspy.header as lasHeader
 
+import warnings
+
 # also works for .asc [delimiter=' ',x=0,y=1,z=2]
-def XYZreadFromCSV(filename,delimiter=',',x=3,y=4,z=5,label=None,returns=None):
+
+
+def XYZreadFromCSV(filename, delimiter=',', x=3, y=4, z=5, label=None, returns=None):
 	data = []
 
 	with open(filename, newline='') as csvfile:
@@ -26,7 +30,7 @@ def XYZreadFromCSV(filename,delimiter=',',x=3,y=4,z=5,label=None,returns=None):
 
 	data = np.array(data)
 	if (label is None) & (returns is None):
-		return data[:,[x,y,z]].astype(float)
+		return data[:, [x, y, z]].astype(float)
 	elif (label is not None) & (returns is None):
 		return data[:, [x, y, z, label]].astype(float)
 	elif (label is None) & (returns is not None):
@@ -36,78 +40,114 @@ def XYZreadFromCSV(filename,delimiter=',',x=3,y=4,z=5,label=None,returns=None):
 
 
 # accepts xyz data as a 2D array (points x dims)
-def writeXYZ(filename,xyz_data,delimiter=' '):
+def writeXYZ(filename, xyz_data, delimiter=' '):
 	i = 0
 	with open(filename, 'w', newline='') as csvfile:
 		spamwriter = csv.writer(csvfile, delimiter=delimiter,
 			quotechar='|', quoting=csv.QUOTE_MINIMAL)
-		for i in range(np.size(xyz_data,0)):
-			spamwriter.writerow(xyz_data[i,:])
-			i=i+1
+		for i in range(np.size(xyz_data, 0)):
+			spamwriter.writerow(xyz_data[i, :])
+			i = i+1
 
-def writeXYZ_labelled(filename,xyz_data,labels,delimiter=' ',returns=None):
+
+def writeXYZ_labelled(filename, xyz_data, labels, delimiter=' ', returns=None):
 	i = 0
 	with open(filename, 'w', newline='') as csvfile:
 		spamwriter = csv.writer(csvfile, delimiter=delimiter,
 			quotechar='|', quoting=csv.QUOTE_MINIMAL)
-		for i in range(np.size(xyz_data,0)):
+		for i in range(np.size(xyz_data, 0)):
 			if returns is None:
-				spamwriter.writerow(np.hstack((xyz_data[i,:],labels[i])))
+				spamwriter.writerow(np.hstack((xyz_data[i, :], labels[i])))
 			else:
 				spamwriter.writerow(np.hstack((xyz_data[i, :], returns[i], labels[i])))
-			i=i+1
+			i = i+1
 
 
+def readFromBin(filename, names, formats, names_wanted=['x', 'y', 'z']):
 
-def readFromBin(filename,names,formats,names_wanted=['x','y','z']):
-	
-	binType = np.dtype( dict(names=names, formats=formats) )
+	binType = np.dtype(dict(names=names, formats=formats))
 	data = np.fromfile(filename, binType)
 
-	return np.array([data[n] for n in names_wanted]).T	
+	return np.array([data[n] for n in names_wanted]).T
 
 
-def readFromPly(filename,readOffset=True):
+def readFromPly(filename, readOffset=True):
 	plydata = PlyData.read(filename)
-	offset = np.array([float(plydata.comments[0]), float(plydata.comments[1]), float(plydata.comments[2])])
+	offset = np.array([float(plydata.comments[0]), float(
+	    plydata.comments[1]), float(plydata.comments[2])])
 	vertex = []
 	for i in range(plydata.elements[0].data.shape[0]):
 		vertex.append(list(plydata.elements[0].data[i]))
 	vertex = np.array(vertex)
 
 	if readOffset:
-		return vertex,offset
+		return vertex, offset
 	else:
 		return vertex
 
-def readFromOff(filename,delimiter=' '):
+
+def readFromOff(filename, delimiter=' '):
 	data = []
-	i=0
-	numPoints=1e4
+	i = 0
+	numPoints = 1e4
 
 	with open(filename, 'rb') as csvfile:
 		spamreader = csv.reader(csvfile, delimiter=delimiter, quotechar='|')
 		for row in spamreader:
-			if i==1:
+			if i == 1:
 				numPoints = int(row[0])
-			elif (i>1) & (i<(numPoints+2)):
+			elif (i > 1) & (i < (numPoints+2)):
 				data.append(row)
 			i = i+1
 
 	data = np.array(data)
 	return data.astype(float)
 
-def readFromLas(filename,convert_colours=False, fields = ['x','y','z','Red','Green','Blue']):
-	inFile = Lasfile(filename, mode='r')
-	pcd = np.zeros(( inFile.x.shape[0] , len(fields) ))
-	for i in range(len(fields)):
-		pcd[:,i] = getattr(inFile, fields[i])
-	#pcd = np.hstack((inFile.x[:, np.newaxis], inFile.y[:, np.newaxis], inFile.z[:, np.newaxis],
-	#                     inFile.Red[:, np.newaxis], inFile.Green[:, np.newaxis], inFile.Blue[:, np.newaxis]))
-	if convert_colours is True:
-		pcd[:,3:]*=(256.0/65535.0) # do this to rgb values from 8-bit
 
-	return pcd
+def readFromLas(filename, convert_colours=False, fields=['x', 'y', 'z', 'Red', 'Green', 'Blue'], keep_class=None, drop_class=None):
+	
+    inFile = Lasfile(filename, mode='r')
+    
+    if (keep_class is not None) and (drop_class is not None):
+        raise ValueError("Specify one of keep_class or drop_class, not both.")
+    
+    if (keep_class is not None or drop_class is not None):
+        
+        cl = inFile.get_classification()
+        classes = np.unique(cl)
+        
+        if isinstance(keep_class, list):
+            keep_class = np.array(keep_class)
+        
+        if isinstance(drop_class, list):
+            drop_class = np.array(drop_class)
+        
+        # Not so concerned if classes in drop_class are missing
+        class_not_in_file = np.isin(keep_class, classes, invert = True)
+        if np.any(class_not_in_file):
+            warnings.warn("Classes provided in keep_class not in file: %s" % str(keep_class[class_not_in_file]))
+        
+        if keep_class is not None:
+            idx_keep = np.isin(cl, keep_class)
+        else:
+            idx_keep = np.isin(cl, drop_class, invert = True)
+        
+        idx_keep = np.where(idx_keep)[0]
+        
+    else:
+        
+        idx_keep = range(len(inFile))
+    
+    
+    pcd = np.zeros(( len(idx_keep) , len(fields) ))
+    for i in range(len(fields)):
+        pcd[:,i] = getattr(inFile, fields[i])[idx_keep]
+   	#pcd = np.hstack((inFile.x[:, np.newaxis], inFile.y[:, np.newaxis], inFile.z[:, np.newaxis],
+   	#                     inFile.Red[:, np.newaxis], inFile.Green[:, np.newaxis], inFile.Blue[:, np.newaxis]))
+    if convert_colours is True:
+        pcd[:,3:]*=(256.0/65535.0) # do this to rgb values from 8-bit
+
+    return pcd
 
 
 # make sure directory finishes with /
