@@ -22,9 +22,6 @@ from skimage import exposure
 
 
 
-warnings.warn("The forest3D.treeDetector module has methods that use the concurrent.futures module.\nWindows users remember to use a main-module header guard.",  )
-
-
 
 class RasterDetector():
 
@@ -54,6 +51,87 @@ class RasterDetector():
 
         assert(len(gridSize) == 3)
         self.gridSize = np.array(gridSize)
+
+
+    
+
+    def sliding_training_data(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, 
+                              windowSize=[100, 100], stepSize=80, classID=0, confidence_thresh=0.5, 
+                              overlap_thresh=5, spatialIndex="QuadTree"):
+
+        if colour_data is None:
+            xyz_clr_data = xyz_data
+        elif len(np.shape(colour_data)) == 1:
+            xyz_clr_data = np.hstack((xyz_data, colour_data[:, np.newaxis]))
+        elif len(np.shape(colour_data)) == 2:
+            xyz_clr_data = np.hstack((xyz_data, colour_data))
+
+        xyz_clr_data = IndexedPCD(
+            xyz_clr_data, [windowSize[0] - stepSize, windowSize[1] - stepSize], spatialIndex)
+        aoi_list = detection_tools.create_all_windows(
+            xyz_clr_data, stepSize, windowSize)
+
+        img_store = []
+        box_store = np.zeros((1, 4))
+        ext_store = np.zeros((1, 6))
+        totalCount = len(aoi_list)
+        counter = 0
+
+        for aoi in aoi_list:  # stepsize 100
+
+            window = xyz_clr_data.points_in_aoi(aoi)
+
+            # track progress
+            counter = counter + 1
+            sys.stdout.write("\r%d out of %d tiles" % (counter, totalCount))
+            sys.stdout.flush()
+
+            if len(window) > 0:
+
+                raster_stack, centre = self._rasterise(
+                    window, ground_pts=ground_pts)
+                raster_stack = np.uint8(raster_stack*255)
+
+                # use object detector to detect trees in raster
+                [img, boxes, classes, scores] = detectObjects(
+                    raster_stack,
+                    addr_weights=os.path.join(detector_addr, 'yolov3.weights'),
+                    addr_confg=os.path.join(detector_addr, 'yolov3.cfg'),
+                    MIN_CONFIDENCE=confidence_thresh
+                )
+
+                if np.shape(boxes)[0] > 0:
+
+                    # convert raster coordinates of bounding boxes to global x y coordinates
+                    bb_coord = detection_tools.boundingBox_to_3dcoords(
+                        boxes_=boxes,
+                        gridSize_=self.gridSize[0:2],
+                        gridRes_=self.res,
+                        windowSize_=windowSize,
+                        pcdCenter_=centre
+                    )
+
+                    # aggregate over windows
+                    box_store = np.vstack((box_store, bb_coord[classes == classID, :]))
+                    
+                    img_store.append(img)
+                    
+                    ext = np.array(aoi.coords(), dtype = np.float64)
+                    ext = np.concatenate((ext, centre))
+                    ext_store = np.vstack((ext_store, ext))
+        
+
+        sys.stdout.write("\n")
+        box_store = box_store[1:, :]
+        ext_store = ext_store[1:, :]
+
+        # remove overlapping boxes
+        idx = detection_tools.find_unique_boxes2(box_store, overlap_thresh)
+        box_store = box_store[idx, :]
+        
+        return box_store, img_store, ext_store
+
+
 
 
     def sliding_window_indexed(self, detector_addr, xyz_data, colour_data=None, ground_pts=None, windowSize=[100, 100], stepSize=80,
