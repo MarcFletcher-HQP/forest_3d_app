@@ -232,6 +232,10 @@ class RasterDetector():
         aoi_list = detection_tools.create_all_windows(xyz_clr_data, stepSize, windowSize)
 
 
+        if(max_cores > len(aoi_list)/2):
+            max_cores = int(len(aoi_list)/2)
+
+
         # Process each window in parallel
         with future.ProcessPoolExecutor(max_workers = max_cores) as executor:
           
