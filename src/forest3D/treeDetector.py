@@ -15,7 +15,6 @@ from forest3D.IndexedPCD import IndexedPCD
 import os
 import sys
 import numpy as np
-import warnings
 import matplotlib.pyplot as plt
 import concurrent.futures as future
 from skimage import exposure
@@ -88,7 +87,7 @@ class RasterDetector():
 
             if len(window) > 0:
 
-                raster_stack, centre = self._rasterise(
+                raster_stack, centre = self._rasterise_quickly(
                     window, ground_pts=ground_pts)
                 raster_stack = np.uint8(raster_stack*255)
 
@@ -165,7 +164,7 @@ class RasterDetector():
 
             if len(window) > 0:
 
-                raster_stack, centre = self._rasterise(
+                raster_stack, centre = self._rasterise_quickly(
                     window, ground_pts=ground_pts)
                 raster_stack = np.uint8(raster_stack*255)
 
@@ -409,6 +408,87 @@ class RasterDetector():
             raster_stack = cmap(norm(raster1))[..., 0:3]
 
         return raster_stack, centre
+    
+    def _rasterise_quickly(self, data, ground_pts=None):
+
+
+        # create occupancy grid representation here to avoid duplication
+        PCD = processLidar.ProcessPC(data.copy()[:, :3])
+        PCD.occupancyGrid_Binary(res_= self.res, gridSize_= self.gridSize)
+        
+
+        # create raster layers
+        raster1, centre = get_raster_quicker(self.raster_layers[0], PCD, self.support_window[0], self.res,
+                                             self.gridSize, ground_pts=ground_pts)
+        raster2, _ = get_raster_quicker(self.raster_layers[1], PCD, self.support_window[1], self.res,
+                                        self.gridSize, ground_pts=ground_pts)
+        raster3, _ = get_raster_quicker(self.raster_layers[2], PCD, self.support_window[2], self.res,
+                                        self.gridSize, ground_pts=ground_pts)
+
+        # normalise
+        if self.normalisation == 'rescale':
+
+            rasters_eq = []
+            for i, raster in enumerate([raster1, raster2, raster3]):
+                # IDE complains about use of 'is not'
+                if self.raster_layers[i] != 'blank':
+
+                    plow, phigh = np.percentile(raster, (0, 100))
+                    raster = exposure.rescale_intensity(
+                        raster, in_range=(plow, phigh))
+                    rasters_eq.append(raster)
+                else:
+                    rasters_eq.append(raster)
+            raster_stack = np.stack(
+                (rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
+
+        if self.normalisation == 'rescale+histeq':
+
+            rasters_eq = []
+            for i, raster in enumerate([raster1, raster2, raster3]):
+                if self.raster_layers[i] != 'blank':
+
+                    if self.doHisteq[i]:
+                        raster_eq = exposure.equalize_hist(raster)
+                    else:
+                        raster_eq = raster
+                    plow, phigh = np.percentile(raster_eq, (0, 100))
+                    raster_eq = exposure.rescale_intensity(
+                        raster_eq, in_range=(plow, phigh))
+                    rasters_eq.append(raster_eq)
+                else:
+                    rasters_eq.append(raster)
+            raster_stack = np.stack(
+                (rasters_eq[0], rasters_eq[1], rasters_eq[2]), axis=2)
+
+        elif self.normalisation == 'cmap_jet':
+
+            assert ((self.raster_layers[1] == 'blank') & (
+                self.raster_layers[2] == 'blank'))
+
+            cmap = plt.cm.jet
+            norm = plt.Normalize(vmin=raster1.min(), vmax=raster1.max())
+            raster_stack = cmap(norm(raster1))[..., 0:3]
+
+        return raster_stack, centre
+
+
+def get_raster_quicker(method_name, PCD, support_window, res, gridSize, ground_pts=None):
+
+    if method_name == 'vertical_density':
+        PCD.vertical_density(support_window=support_window)
+        
+        return PCD.bev_verticalDensity, PCD._ProcessPC__centre[0:2]
+
+    elif method_name == 'max_height':
+        PCD.max_height(support_window=support_window)
+
+        return PCD.bev_maxHeight, PCD._ProcessPC__centre[0:2]
+
+    elif method_name == 'blank':
+
+        return 0.5 * np.ones((gridSize[:2])), None
+
 
 
 def get_raster(method_name, data, support_window, res, gridSize, ground_pts=None):
@@ -535,7 +615,7 @@ class ProcessWindow:
       
         if len(window) > 0:
           
-          raster_stack,centre = self.raster_detector._rasterise(window, ground_pts = self.ground_pts)
+          raster_stack,centre = self.raster_detector._rasterise_quickly(window, ground_pts = self.ground_pts)
           raster_stack = np.uint8(raster_stack * 255)
     
           # use object detector to detect trees in raster
