@@ -244,6 +244,10 @@ class RasterDetector():
           boxes = executor.map(process_window, [xyz_clr_data.points_in_aoi(aoi) for aoi in aoi_list])
         
         
+        
+        if boxes is None:
+            return None
+        
         counter = 0
         totalCount = len(aoi_list)
         box_store = np.zeros((1, 4))
@@ -612,30 +616,32 @@ class ProcessWindow:
     
     
     def __call__(self, window):
+        
       
-        if len(window) > 0:
+        if len(window) == 0:
+            return None
           
-          raster_stack,centre = self.raster_detector._rasterise_quickly(window, ground_pts = self.ground_pts)
-          raster_stack = np.uint8(raster_stack * 255)
-    
-          # use object detector to detect trees in raster
-          [img, boxes, classes, scores] = detectObjects(raster_stack, 
-                                            addr_weights = self.addr_weights,
-                                            addr_confg = self.addr_config, 
-                                            MIN_CONFIDENCE = self.confidence_thresh
-                                          )
-    
-          if np.shape(boxes)[0] == 0:
-              return None
-          
-          
-          # convert raster coordinates of bounding boxes to global x y coordinates
-          bb_coord = detection_tools.boundingBox_to_3dcoords(
-                      boxes_ = boxes, 
-                      gridSize_ = self.raster_detector.gridSize[0:2], 
-                      gridRes_ = self.raster_detector.res, 
-                      windowSize_ = self.windowSize, 
-                      pcdCenter_ = centre
-                    )
-          
+        raster_stack,centre = self.raster_detector._rasterise_quickly(window, ground_pts = self.ground_pts)
+        raster_stack = np.uint8(raster_stack * 255)
+
+        # use object detector to detect trees in raster
+        [img, boxes, classes, scores] = detectObjects(raster_stack, 
+                                          addr_weights = self.addr_weights,
+                                          addr_confg = self.addr_config, 
+                                          MIN_CONFIDENCE = self.confidence_thresh
+                                        )
+
+        if np.shape(boxes)[0] == 0:
+            return None
+      
+      
+        # convert raster coordinates of bounding boxes to global x y coordinates
+        bb_coord = detection_tools.boundingBox_to_3dcoords(
+                    boxes_ = boxes, 
+                    gridSize_ = self.raster_detector.gridSize[0:2], 
+                    gridRes_ = self.raster_detector.res, 
+                    windowSize_ = self.windowSize, 
+                    pcdCenter_ = centre
+                  )
+      
         return bb_coord[classes == self.classID, :]
